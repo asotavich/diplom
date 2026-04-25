@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+/* App-wide custom tokens; Tailwind 4 picks these up automatically. */
+@theme {
+  --color-brand-50:  #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+/* Tailwind's form reset is intentionally minimal; we only add what the
+   shared components need so the rest stays configurable per-page. */
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

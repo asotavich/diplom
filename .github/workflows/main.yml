@@ -1,0 +1,133 @@
+# =============================================================================
+# FEAnalyzer — Continuous Integration
+#
+# Runs on every push and pull request (all branches).
+# Jobs run in parallel:
+#   backend  — Ruff lint + Django system check + unit tests
+#   frontend — ESLint + Vite production build
+#   compose  — docker compose config validation
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Job 1: Python linting + Django configuration check + unit tests
+  # ---------------------------------------------------------------------------
+  backend:
+    name: "Backend — Lint, Check & Test"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Ruff covers pyflakes (F) + pycodestyle (E/W) in one fast pass.
+      # No project config exists yet, so defaults apply: E + F rules.
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Ruff — lint
+        run: ruff check . --extend-ignore E501,E402 --exclude venv,staticfiles,mediafiles
+
+      # Install runtime deps so `manage.py check` can import every app.
+      - name: Install project dependencies
+        run: pip install -r requirements.txt
+
+      # `manage.py check` validates models, URL patterns, and settings
+      # without opening a real DB connection.
+      # Env vars satisfy required environ.Env() calls; values are dummies.
+      - name: Django system check
+        env: &django_env
+          DJANGO_SECRET_KEY: "ci-placeholder-key-not-used-in-production-1234567890"
+          DJANGO_DEBUG: "0"
+          DJANGO_ALLOWED_HOSTS: "localhost"
+          POSTGRES_DB: feanalyzer_ci
+          POSTGRES_USER: feanalyzer_ci
+          POSTGRES_PASSWORD: ci_placeholder_password
+          POSTGRES_HOST: "localhost"
+          POSTGRES_PORT: "5432"
+          REDIS_HOST: "localhost"
+          REDIS_PORT: "6379"
+          CELERY_BROKER_URL: "redis://localhost:6379/0"
+          CELERY_RESULT_BACKEND: "redis://localhost:6379/1"
+          CORS_ALLOWED_ORIGINS: "http://localhost"
+          JWT_ACCESS_TOKEN_LIFETIME_MIN: "15"
+          JWT_REFRESH_TOKEN_LIFETIME_DAYS: "7"
+        run: python manage.py check
+
+      # Generate the full OpenAPI 3 schema and fail if drf-spectacular
+      # emits any warnings (e.g. missing response schemas, ambiguous types).
+      - name: OpenAPI schema validation
+        env: *django_env
+        run: python manage.py spectacular --validate --fail-on-warn --file /dev/null
+
+      # Unit tests cover the pure-logic surface (services, exports,
+      # plantuml, model math, view helpers, signals, throttle wiring).
+      # ``settings.TESTING`` swaps the DB to in-memory SQLite, so no
+      # Postgres service container is required for this job.
+      - name: Run Django unit tests
+        env: *django_env
+        run: python manage.py test analyzer --verbosity 2
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Frontend linting + production build
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: "Frontend — Lint & Build"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # Switch to cache: 'npm' once package-lock.json is committed.
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: ESLint
+        run: npm run lint
+
+      # A successful Vite build is the strongest correctness signal we have
+      # without a browser test suite.
+      - name: Production build
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Validate docker-compose.yml structure
+  # ---------------------------------------------------------------------------
+  compose-validate:
+    name: "Docker — Compose Config"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # docker compose config resolves all variables and validates YAML.
+      # .env.production is committed with CHANGE_ME placeholders, which is
+      # enough for structural validation.
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet

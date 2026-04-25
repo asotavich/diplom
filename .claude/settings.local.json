@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(DJANGO_SECRET_KEY=\"ci-check-key-1234567890abcdef\" POSTGRES_DB=feanalyzer POSTGRES_USER=feanalyzer_user POSTGRES_PASSWORD=ci_pass POSTGRES_HOST=localhost python *)",
+      "Bash(venv/Scripts/pip install *)",
+      "Bash(DJANGO_SECRET_KEY=\"ci-check-key-1234567890abcdef\" POSTGRES_DB=feanalyzer POSTGRES_USER=feanalyzer_user POSTGRES_PASSWORD=ci_pass POSTGRES_HOST=localhost venv/Scripts/python manage.py check)",
+      "Bash(C:/Users/Andrew/Desktop/hlotov_diplom/venv/Scripts/pip.exe install *)",
+      "Bash(C:/Users/Andrew/Desktop/hlotov_diplom/venv/Scripts/python.exe manage.py check)",
+      "Bash(C:/Users/Andrew/Desktop/hlotov_diplom/venv/Scripts/python.exe manage.py makemigrations --check --dry-run)",
+      "Bash(docker-compose down *)",
+      "Bash(docker-compose up *)",
+      "Bash(docker-compose exec *)",
+      "Bash(docker-compose ps *)",
+      "Bash(docker-compose logs *)"
+    ]
+  }
+}

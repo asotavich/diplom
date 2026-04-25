@@ -1,0 +1,85 @@
+# =============================================================================
+# FEAnalyzer — .gitignore
+# =============================================================================
+
+# ---- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.python-version
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ---- Virtual environments ---------------------------------------------------
+venv/
+.venv/
+env/
+ENV/
+.env_local/
+
+# ---- Local development secrets ----------------------------------------------
+# .env holds real credentials for local development — never commit it.
+# .env.production is committed intentionally: it only contains CHANGE_ME
+# placeholders and acts as a template. Edit it on the server; do not push
+# real secrets.
+.env
+
+# ---- Django runtime artifacts -----------------------------------------------
+db.sqlite3
+db.sqlite3-journal
+staticfiles/
+mediafiles/
+*.log
+local_settings.py
+
+# ---- Frontend ---------------------------------------------------------------
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# ---- Coverage / testing -----------------------------------------------------
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# ---- Type checking ----------------------------------------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# ---- IDE & editors ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+*.sublime-workspace
+*.sublime-project
+
+# ---- OS artifacts -----------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini

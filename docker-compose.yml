@@ -1,0 +1,141 @@
+# =============================================================================
+# FEAnalyzer — Production Docker Compose stack
+# Services:
+#   db        — PostgreSQL 16
+#   redis     — Redis 7 (Celery broker + result backend)
+#   web       — Django + Gunicorn
+#   celery    — Celery worker (shares the web image)
+#   frontend  — Nginx + built React SPA; also reverse-proxies /api, /admin,
+#               /healthz to ``web`` and serves /static + /media from shared
+#               volumes. Replaces the stand-alone ``nginx`` service.
+# =============================================================================
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    container_name: feanalyzer_db
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: feanalyzer_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: feanalyzer-web:latest
+    container_name: feanalyzer_web
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      DJANGO_MIGRATE: "1"
+      DJANGO_COLLECTSTATIC: "1"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/mediafiles
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  celery:
+    image: feanalyzer-web:latest
+    container_name: feanalyzer_celery
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      DJANGO_MIGRATE: "0"
+      DJANGO_COLLECTSTATIC: "0"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    # Share the same media_volume as the web container so file uploads
+    # (FR-03) written by Django are visible to the Celery worker. Without
+    # this mount the worker raises FileNotFoundError on
+    # ``/app/mediafiles/uploads/...`` because each container has its own
+    # ephemeral copy of that path.
+    volumes:
+      - media_volume:/app/mediafiles
+    command: celery -A frontend_analyzer worker --loglevel=info --concurrency=2
+    depends_on:
+      web:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    image: feanalyzer-frontend:latest
+    container_name: feanalyzer_frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - static_volume:/var/www/static:ro
+      - media_volume:/var/www/media:ro
+    depends_on:
+      - web
+    networks:
+      - backend
+
+# =============================================================================
+# Named volumes (survive `docker compose down`; removed only with `-v`).
+# =============================================================================
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  media_volume:
+
+# =============================================================================
+# Private internal network. Only ``frontend`` publishes a port to the host.
+# =============================================================================
+networks:
+  backend:
+    driver: bridge

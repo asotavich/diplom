@@ -1,0 +1,61 @@
+# =============================================================================
+# Files and folders excluded from the Docker build context.
+# Keeps the image small and stops secrets / dev artefacts from leaking in.
+# =============================================================================
+
+# --- Python runtime artefacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- Local databases ---
+db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+
+# --- Secrets / local env ---
+.env
+.env.*
+!.env.production
+
+# --- VCS / editors ---
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Front-end (built by its own Dockerfile / context) ---
+frontend/
+
+# --- Runtime output ---
+staticfiles/
+mediafiles/
+media/
+logs/
+*.log
+
+# --- Docs / misc ---
+README.md
+docs/
+*.md
+!requirements.txt
