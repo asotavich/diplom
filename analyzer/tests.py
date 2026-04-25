@@ -35,7 +35,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from analyzer import exports, plantuml, services
+from analyzer import exports
 from analyzer.models import (
     DEFAULT_WEIGHT,
     AnalysisReport,
@@ -366,10 +366,10 @@ class ComplexityFormulaTests(SimpleTestCase):
 class WeightSumValidatorTests(SimpleTestCase):
     """The W₁ + W₂ + W₃ = 1.0 invariant from Section 1.3.4."""
 
-    def _report(self, l, s, sc):
+    def _report(self, w_links, s, sc):
         return AnalysisReport(
             count_links=0, count_styles=0, count_scripts=0,
-            weight_links=Decimal(l),
+            weight_links=Decimal(w_links),
             weight_styles=Decimal(s),
             weight_scripts=Decimal(sc),
         )
