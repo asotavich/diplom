@@ -39,7 +39,7 @@ RUN rm -f /etc/nginx/conf.d/default.conf \
     && mkdir -p /etc/nginx/snippets /var/www/static /var/www/media
 
 COPY nginx/nginx.conf           /etc/nginx/conf.d/feanalyzer.conf
-COPY nginx/proxy_headers.conf   /etc/nginx/snippets/feanalyzer_proxy_headers.conf
+COPY nginx/proxy_headers.conf /etc/nginx/snippets/proxy_headers.conf
 
 COPY --from=builder /app/dist   /usr/share/nginx/html
 
