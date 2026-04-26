@@ -25,11 +25,10 @@ ENV/
 .env_local/
 
 # ---- Local development secrets ----------------------------------------------
-# .env holds real credentials for local development — never commit it.
-# .env.production is committed intentionally: it only contains CHANGE_ME
-# placeholders and acts as a template. Edit it on the server; do not push
-# real secrets.
+# Real env files (with secrets) must NEVER be committed.
+# Only `.env.production.example` (a template with CHANGE_ME placeholders) is tracked.
 .env
+.env.production
 
 # ---- Django runtime artifacts -----------------------------------------------
 db.sqlite3

@@ -63,7 +63,7 @@ services:
       DJANGO_MIGRATE: "1"
       DJANGO_COLLECTSTATIC: "1"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-test-key-change-me-in-production}
-      DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,web}
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:8080,http://127.0.0.1:8080}
       DJANGO_LOG_LEVEL: ${DJANGO_LOG_LEVEL:-INFO}
@@ -101,7 +101,7 @@ services:
       DJANGO_MIGRATE: "0"
       DJANGO_COLLECTSTATIC: "0"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-test-key-change-me-in-production}
-      DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,web}
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:8080,http://127.0.0.1:8080}
       DJANGO_LOG_LEVEL: ${DJANGO_LOG_LEVEL:-INFO}
