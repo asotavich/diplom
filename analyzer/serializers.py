@@ -42,6 +42,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     validators (see ``AUTH_PASSWORD_VALIDATORS`` in settings).
     """
 
+    #: Audit M-5 — a single opaque rejection used for *any* duplicate-
+    #: username or duplicate-email collision so the response shape never
+    #: confirms whether a given handle / inbox is already registered.
+    GENERIC_REGISTRATION_REJECT = (
+        "Registration could not be completed. "
+        "Please check your details and try again."
+    )
+
     password = serializers.CharField(
         write_only=True,
         required=True,
@@ -59,21 +67,18 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         model = User
         fields = ("username", "email", "password", "password_confirm")
 
-    def validate_username(self, value: str) -> str:
-        if User.objects.filter(username__iexact=value).exists():
-            raise serializers.ValidationError("A user with that username already exists.")
-        return value
-
-    def validate_email(self, value: str) -> str:
-        if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError("A user with that email already exists.")
-        return value
-
     def validate(self, attrs: dict) -> dict:
         if attrs["password"] != attrs["password_confirm"]:
             raise serializers.ValidationError(
                 {"password_confirm": "Passwords do not match."}
             )
+        # M-5: do NOT branch the error message on which field collided —
+        # that's the enumeration oracle. One generic non-field error.
+        if (
+            User.objects.filter(username__iexact=attrs["username"]).exists()
+            or User.objects.filter(email__iexact=attrs["email"]).exists()
+        ):
+            raise serializers.ValidationError(self.GENERIC_REGISTRATION_REJECT)
         return attrs
 
     def create(self, validated_data: dict) -> User:

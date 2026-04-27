@@ -32,6 +32,7 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 from celery.utils import uuid as celery_uuid
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -49,6 +50,11 @@ from rest_framework.reverse import reverse
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import (
+    TokenBlacklistView,
+    TokenObtainPairView,
+    TokenRefreshView,
+)
 
 from .exports import build_report_excel, build_report_pdf
 from .models import AnalysisReport, Project
@@ -66,14 +72,115 @@ User = get_user_model()
 
 
 # ---------------------------------------------------------------------------
+# Refresh-cookie helpers (audit C-B)
+# ---------------------------------------------------------------------------
+#
+# The refresh token never appears in a JSON response body or in
+# JavaScript-reachable storage. It is set as an httpOnly Secure
+# SameSite=Strict cookie scoped to ``/api/auth/`` so only the auth
+# endpoints below can ever see it; the access token stays short-lived
+# and lives in the React process memory only.
+# ---------------------------------------------------------------------------
+
+def _set_refresh_cookie(response: Response, refresh_value: str) -> None:
+    """Attach the refresh JWT to ``response`` as a hardened cookie."""
+    response.set_cookie(
+        key=settings.JWT_REFRESH_COOKIE_NAME,
+        value=refresh_value,
+        max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
+        httponly=True,
+        secure=settings.JWT_REFRESH_COOKIE_SECURE,
+        samesite=settings.JWT_REFRESH_COOKIE_SAMESITE,
+        path=settings.JWT_REFRESH_COOKIE_PATH,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=settings.JWT_REFRESH_COOKIE_NAME,
+        path=settings.JWT_REFRESH_COOKIE_PATH,
+        samesite=settings.JWT_REFRESH_COOKIE_SAMESITE,
+    )
+
+
+def _inject_refresh_from_cookie(request) -> None:
+    """
+    SimpleJWT's serializers expect ``refresh`` in the request body. Lift it
+    out of the cookie so the existing serializer pipeline works unchanged.
+    """
+    cookie = request.COOKIES.get(settings.JWT_REFRESH_COOKIE_NAME)
+    if not cookie:
+        return
+    try:
+        data = request.data.copy()
+    except AttributeError:
+        data = dict(request.data)
+    data["refresh"] = cookie
+    # DRF caches parsed data on the request; replace it.
+    request._full_data = data
+
+
+class CookieTokenObtainPairView(TokenObtainPairView):
+    """
+    POST /api/auth/login/ — returns the access token in JSON, sets the
+    refresh token as an httpOnly cookie. Audit C-B.
+    """
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == status.HTTP_200_OK:
+            refresh = response.data.pop("refresh", None)
+            if refresh:
+                _set_refresh_cookie(response, refresh)
+        return response
+
+
+class CookieTokenRefreshView(TokenRefreshView):
+    """
+    POST /api/auth/refresh/ — reads the refresh token from the cookie,
+    returns a fresh access token in JSON, and rotates the cookie value.
+    Audit C-B.
+    """
+
+    def post(self, request, *args, **kwargs):
+        _inject_refresh_from_cookie(request)
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == status.HTTP_200_OK:
+            new_refresh = response.data.pop("refresh", None)
+            if new_refresh:
+                _set_refresh_cookie(response, new_refresh)
+        return response
+
+
+class CookieTokenBlacklistView(TokenBlacklistView):
+    """
+    POST /api/auth/logout/ — pulls the refresh token from the cookie,
+    blacklists it, then clears the cookie. Audit C-B.
+    """
+
+    def post(self, request, *args, **kwargs):
+        _inject_refresh_from_cookie(request)
+        try:
+            response = super().post(request, *args, **kwargs)
+        except Exception:
+            # Even if blacklisting fails (e.g. token already expired) we
+            # still want to clear the cookie client-side.
+            response = Response(status=status.HTTP_205_RESET_CONTENT)
+        _clear_refresh_cookie(response)
+        return response
+
+
+# ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 
 @extend_schema(
     summary="Register a new user account",
     description=(
-        "Creates a new user and immediately issues a JWT access/refresh pair "
-        "so the client can skip the extra `/api/auth/login/` round-trip after signup."
+        "Creates a new user, returns the short-lived access token in the "
+        "JSON body and the long-lived refresh token in an httpOnly Secure "
+        "SameSite=Strict cookie so it is never reachable from JavaScript "
+        "(audit C-B)."
     ),
     responses={
         201: inline_serializer(
@@ -82,9 +189,6 @@ User = get_user_model()
                 "user": UserProfileSerializer(),
                 "access": drf_serializers.CharField(
                     help_text="Short-lived JWT access token (default 15 min)."
-                ),
-                "refresh": drf_serializers.CharField(
-                    help_text="Long-lived JWT refresh token (default 7 days)."
                 ),
             },
         ),
@@ -101,7 +205,8 @@ class RegisterView(generics.CreateAPIView):
     POST /api/auth/register/
 
     Creates a new user and immediately issues a JWT access/refresh pair so
-    the client can skip the extra /login/ round-trip after signup.
+    the client can skip the extra /login/ round-trip after signup. The
+    refresh half is delivered as an httpOnly cookie (audit C-B).
     """
 
     serializer_class = UserRegistrationSerializer
@@ -116,14 +221,15 @@ class RegisterView(generics.CreateAPIView):
         refresh = RefreshToken.for_user(user)
         logger.info("New user registered: '%s' (id=%s)", user.username, user.pk)
 
-        return Response(
+        response = Response(
             {
                 "user": UserProfileSerializer(user).data,
                 "access": str(refresh.access_token),
-                "refresh": str(refresh),
             },
             status=status.HTTP_201_CREATED,
         )
+        _set_refresh_cookie(response, str(refresh))
+        return response
 
 
 class UserProfileView(generics.RetrieveUpdateAPIView):

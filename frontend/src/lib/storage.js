@@ -1,28 +1,29 @@
 /**
- * Tiny wrapper around localStorage for the JWT pair.
+ * In-memory holder for the short-lived access token.
  *
- * Centralised here so the axios interceptor and the auth context never
- * touch localStorage keys directly — one place to change if we ever
- * switch to an httpOnly cookie strategy.
+ * Audit C-B: the JWT pair used to live in localStorage, where any XSS
+ * (including a future supply-chain compromise of a transitive
+ * dependency) could read both halves and silently impersonate the user
+ * for the full refresh-token lifetime. The refresh token now lives in
+ * an httpOnly cookie issued by the auth endpoints; the access token is
+ * kept here, in module-scope memory only, so it disappears the moment
+ * the SPA process is torn down.
+ *
+ * On a fresh page load there is no access token in memory — the SPA
+ * boot path must POST /api/auth/refresh/ (which sends the cookie
+ * automatically) to obtain one. See `AuthContext.bootstrap`.
  */
 
-const ACCESS_KEY = "feanalyzer.access";
-const REFRESH_KEY = "feanalyzer.refresh";
+let accessToken = null;
 
 export function getAccessToken() {
-  return localStorage.getItem(ACCESS_KEY);
+  return accessToken;
 }
 
-export function getRefreshToken() {
-  return localStorage.getItem(REFRESH_KEY);
+export function setAccessToken(token) {
+  accessToken = token || null;
 }
 
-export function setTokens({ access, refresh }) {
-  if (access) localStorage.setItem(ACCESS_KEY, access);
-  if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
-}
-
-export function clearTokens() {
-  localStorage.removeItem(ACCESS_KEY);
-  localStorage.removeItem(REFRESH_KEY);
+export function clearAccessToken() {
+  accessToken = null;
 }

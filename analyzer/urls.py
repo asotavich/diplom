@@ -6,16 +6,15 @@ urls.py, so the full paths look like ``/api/auth/login/`` etc.
 """
 
 from django.urls import path
-from rest_framework_simplejwt.views import (
-    TokenBlacklistView,
-    TokenObtainPairView,
-    TokenRefreshView,
-    TokenVerifyView,
-)
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.views import TokenVerifyView
 
 from .views import (
     AnalysisReportDetailView,
     AnalysisReportListCreateView,
+    CookieTokenBlacklistView,
+    CookieTokenObtainPairView,
+    CookieTokenRefreshView,
     ProjectDetailView,
     ProjectListCreateView,
     RegisterView,
@@ -25,15 +24,26 @@ from .views import (
     UserProfileView,
 )
 
+
+class _ThrottledTokenVerifyView(TokenVerifyView):
+    """
+    Audit M-7 — TokenVerifyView used to inherit only the global
+    AnonRateThrottle. A separate scope (``token_verify``) lets us cap
+    token-probe traffic without touching the SPA's anon budget.
+    """
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "token_verify"
+
 app_name = "analyzer"
 
 urlpatterns = [
     # ---- Authentication -------------------------------------------------
     path("auth/register/", RegisterView.as_view(), name="register"),
-    path("auth/login/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
-    path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
-    path("auth/logout/", TokenBlacklistView.as_view(), name="token_blacklist"),
+    path("auth/login/", CookieTokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("auth/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
+    path("auth/verify/", _ThrottledTokenVerifyView.as_view(), name="token_verify"),
+    path("auth/logout/", CookieTokenBlacklistView.as_view(), name="token_blacklist"),
     path("auth/profile/", UserProfileView.as_view(), name="profile"),
 
     # ---- Projects -------------------------------------------------------

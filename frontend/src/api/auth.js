@@ -1,25 +1,32 @@
 /**
  * Auth API wrappers — thin, typed-ish surface over the DRF/SimpleJWT
- * endpoints. None of these functions touch localStorage; that's the
- * AuthContext's job.
+ * endpoints. Audit C-B: the refresh JWT is delivered as an httpOnly
+ * cookie set by the server, so it never appears in the JSON these
+ * functions return and is never readable from JavaScript.
  */
 
 import api from "./client";
 
 export async function login({ username, password }) {
-  // Returns { access, refresh }
+  // Returns { access }; refresh JWT arrives as a Set-Cookie header.
   const { data } = await api.post("/auth/login/", { username, password });
   return data;
 }
 
 export async function register({ username, email, password, passwordConfirm }) {
-  // Returns { user, access, refresh }
+  // Returns { user, access }; refresh JWT arrives as a Set-Cookie header.
   const { data } = await api.post("/auth/register/", {
     username,
     email,
     password,
     password_confirm: passwordConfirm,
   });
+  return data;
+}
+
+export async function refresh() {
+  // The refresh-token cookie is sent automatically; body stays empty.
+  const { data } = await api.post("/auth/refresh/", {});
   return data;
 }
 
@@ -33,11 +40,11 @@ export async function updateProfile(patch) {
   return data;
 }
 
-export async function logout(refreshToken) {
-  // Best-effort — server blacklists the refresh; if it fails we still
-  // wipe the tokens client-side.
+export async function logout() {
+  // Best-effort — server blacklists the refresh + clears the cookie. We
+  // swallow errors because the access-token wipe must always succeed.
   try {
-    await api.post("/auth/logout/", { refresh: refreshToken });
+    await api.post("/auth/logout/", {});
   } catch {
     /* ignore */
   }

@@ -2,10 +2,10 @@
  * AuthContext — single source of truth for the logged-in user.
  *
  * On mount:
- *   1. If an access token is in storage, fetch the profile.
- *   2. If profile fetch fails with 401 the axios interceptor will try
- *      to refresh once and then fire `auth:logout`; this context
- *      listens for that event and clears its own state.
+ *   1. POST /api/auth/refresh/ — the httpOnly refresh cookie (audit C-B)
+ *      either gives us back a fresh access token or 401s.
+ *   2. On 200, fetch the profile and seed `user`.
+ *   3. On any failure, leave `user` null — the app routes to /login.
  */
 
 import {
@@ -18,10 +18,8 @@ import {
 
 import * as authApi from "../api/auth";
 import {
-  clearTokens,
-  getAccessToken,
-  getRefreshToken,
-  setTokens,
+  clearAccessToken,
+  setAccessToken,
 } from "../lib/storage";
 
 const AuthContext = createContext(null);
@@ -32,21 +30,27 @@ export function AuthProvider({ children }) {
 
   // --- initial bootstrap ---------------------------------------------------
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) {
-      setIsBootstrapping(false);
-      return;
-    }
+    let cancelled = false;
 
-    authApi
-      .fetchProfile()
-      .then(setUser)
-      .catch(() => {
-        // Interceptor already tried a refresh; if we're here, it failed.
-        clearTokens();
-        setUser(null);
-      })
-      .finally(() => setIsBootstrapping(false));
+    (async () => {
+      try {
+        const { access } = await authApi.refresh();
+        if (cancelled) return;
+        setAccessToken(access);
+        const profile = await authApi.fetchProfile();
+        if (cancelled) return;
+        setUser(profile);
+      } catch {
+        clearAccessToken();
+        if (!cancelled) setUser(null);
+      } finally {
+        if (!cancelled) setIsBootstrapping(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // --- interceptor → context bridge ---------------------------------------
@@ -58,22 +62,21 @@ export function AuthProvider({ children }) {
 
   // --- actions -------------------------------------------------------------
   const login = useCallback(async ({ username, password }) => {
-    const tokens = await authApi.login({ username, password });
-    setTokens(tokens);
+    const { access } = await authApi.login({ username, password });
+    setAccessToken(access);
     const profile = await authApi.fetchProfile();
     setUser(profile);
   }, []);
 
   const register = useCallback(async (payload) => {
     const data = await authApi.register(payload);
-    setTokens({ access: data.access, refresh: data.refresh });
+    setAccessToken(data.access);
     setUser(data.user);
   }, []);
 
   const logout = useCallback(async () => {
-    const refresh = getRefreshToken();
-    await authApi.logout(refresh);
-    clearTokens();
+    await authApi.logout();
+    clearAccessToken();
     setUser(null);
   }, []);
 

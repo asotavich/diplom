@@ -42,6 +42,21 @@ if _env_file.exists():
 SECRET_KEY = env("DJANGO_SECRET_KEY")
 DEBUG = env.bool("DJANGO_DEBUG")
 
+# ``HTTPS_ENFORCED`` gates every setting that requires the request chain to
+# be terminating TLS upstream (HSTS, Secure cookies, SSL redirect). It is
+# independent of ``DEBUG`` so a "docker compose up" run on plain HTTP
+# localhost can opt out without flipping DEBUG on. Defaults to ``not
+# DEBUG`` so production stays hardened. For HTTP-only local testing, set
+# ``DJANGO_HTTPS_ENFORCED=0``.
+HTTPS_ENFORCED = env.bool("DJANGO_HTTPS_ENFORCED", default=not DEBUG)
+
+# Dedicated signing key for SimpleJWT (fixing audit finding C-A). Decoupling
+# this from DJANGO_SECRET_KEY means a SECRET_KEY rotation no longer
+# invalidates every issued JWT, and a SECRET_KEY leak does not let an
+# attacker forge tokens. Falls back to SECRET_KEY only if the dedicated key
+# is not configured, so existing dev deployments keep working.
+JWT_SIGNING_KEY = env("JWT_SIGNING_KEY", default=SECRET_KEY)
+
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
 
@@ -134,7 +149,11 @@ else:
 # ---------------------------------------------------------------------------
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        # Audit finding M-8: 8 chars is below 2026 NIST SP 800-63B guidance.
+        "OPTIONS": {"min_length": 12},
+    },
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
@@ -196,6 +215,9 @@ REST_FRAMEWORK = {
         # Per-user cap on POST /api/reports/. Protects the Celery worker
         # pool from a single user queuing hundreds of scans.
         "analysis_create": "10/minute",
+        # Audit M-7 — independent budget for /api/auth/verify/ so token
+        # probing cannot exhaust the SPA's general anon allowance.
+        "token_verify": "30/minute",
     },
     # drf-spectacular: use its AutoSchema for OpenAPI 3 generation.
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -208,11 +230,32 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
     "ALGORITHM": "HS256",
-    "SIGNING_KEY": SECRET_KEY,
+    "SIGNING_KEY": JWT_SIGNING_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
+
+# Audit C-B — refresh tokens live in an httpOnly Secure SameSite cookie
+# issued by /api/auth/login|register|refresh/, never in JS-reachable
+# storage. Access tokens stay short-lived (15 min default) and are kept in
+# memory only on the client.
+#
+# ``JWT_REFRESH_COOKIE_SECURE`` follows ``HTTPS_ENFORCED`` so a browser
+# loading the SPA over HTTP localhost still receives & stores the cookie
+# during dev. In production (``HTTPS_ENFORCED=True``) the Secure attribute
+# is set, so the cookie cannot accidentally leak over plain HTTP.
+#
+# ``JWT_REFRESH_COOKIE_SAMESITE`` defaults to ``Lax``: it still protects
+# the refresh endpoint from cross-site POST CSRF (browsers strip the
+# cookie from cross-site fetch/XHR requests), but does not break the
+# top-level navigation flows that ``Strict`` would interrupt. Override
+# to ``Strict`` in production via the env var if your deployment never
+# needs cross-site link-throughs.
+JWT_REFRESH_COOKIE_NAME = "feanalyzer_refresh"
+JWT_REFRESH_COOKIE_PATH = "/api/auth/"
+JWT_REFRESH_COOKIE_SAMESITE = env("JWT_REFRESH_COOKIE_SAMESITE", default="Lax")
+JWT_REFRESH_COOKIE_SECURE = HTTPS_ENFORCED
 
 
 # ---------------------------------------------------------------------------
@@ -239,20 +282,30 @@ CELERY_RESULT_EXPIRES = 60 * 60 * 24  # keep task results for 24h
 
 
 # ---------------------------------------------------------------------------
-# Security hardening (only enforced when DEBUG is off)
+# Security hardening — see ``HTTPS_ENFORCED`` defined at the top of this
+# file. Settings below are split into "always safe under HTTP" and
+# "requires TLS in front" so an HTTP-localhost dev run does not get
+# 301-redirected to a port that has no TLS listener.
 # ---------------------------------------------------------------------------
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 
+# These are safe regardless of HTTPS — they don't break HTTP traffic.
 if not DEBUG:
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+    X_FRAME_OPTIONS = "DENY"
+
+# These ONLY make sense when TLS is actually present in front of the app.
+if HTTPS_ENFORCED:
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    SECURE_CONTENT_TYPE_NOSNIFF = True
-    SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    X_FRAME_OPTIONS = "DENY"
+    # Audit finding M-1: ensure plain-HTTP requests get a 301 to HTTPS so
+    # HSTS can reach the browser on the very first visit.
+    SECURE_SSL_REDIRECT = True
 
 
 # ---------------------------------------------------------------------------

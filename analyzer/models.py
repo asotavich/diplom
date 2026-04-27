@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, URLValidator
-from django.db import models
+from django.db import IntegrityError, models, transaction
 from django.utils.translation import gettext_lazy as _
 
 User = get_user_model()
@@ -80,8 +80,12 @@ def generate_unique_report_slug(report: "AnalysisReport") -> str:
     """
     Build a unique slug for ``report``: ``<base>-<6 hex chars>``.
 
-    Re-rolls the random suffix on the unlikely event of a collision so the
-    DB-level uniqueness constraint never trips for a legitimate save.
+    The optimistic ``.filter().exists()`` check below skips slugs that we
+    already know are taken — but it is *not* the source of truth: the DB
+    UNIQUE constraint is. The ``save()`` path wraps the actual INSERT in
+    a try / except IntegrityError loop (audit M-4) so two concurrent
+    transactions that pass the existence check at the same moment cannot
+    leak a 500 to the user.
     """
     base = build_report_slug_base(report)
     qs = AnalysisReport.objects.exclude(pk=report.pk) if report.pk else AnalysisReport.objects.all()
@@ -437,10 +441,32 @@ class AnalysisReport(models.Model):
         Auto-populate :attr:`slug` on first save so callers don't have to
         think about it. Existing slugs are never overwritten — once the
         client has a URL pointing at a report, that URL stays stable.
+
+        Audit M-4: the ``.filter().exists()`` check inside
+        ``generate_unique_report_slug`` is racy under concurrent inserts,
+        so the DB unique constraint is the actual source of truth. We
+        catch its ``IntegrityError`` and re-roll a fresh suffix instead of
+        bubbling a 500 up to the user.
         """
-        if not self.slug:
+        if self.slug:
+            super().save(*args, **kwargs)
+            return
+
+        last_error: IntegrityError | None = None
+        for _attempt in range(8):
             self.slug = generate_unique_report_slug(self)
-        super().save(*args, **kwargs)
+            try:
+                with transaction.atomic():
+                    super().save(*args, **kwargs)
+                return
+            except IntegrityError as exc:
+                # Concurrent insert won the race for this slug; retry.
+                last_error = exc
+                self.slug = ""
+                continue
+        raise last_error or RuntimeError(  # pragma: no cover
+            "Could not allocate a unique slug after 8 collision retries."
+        )
 
     # ------------------------------------------------------------------
     # Business logic

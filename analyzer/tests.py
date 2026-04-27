@@ -47,7 +47,10 @@ from analyzer.models import (
 from analyzer.plantuml import build_plantuml
 from analyzer.serializers import AnalysisReportSerializer
 from analyzer.services import (
+    MAX_RESPONSE_BYTES,
     UnsafeURLError,
+    _pin_dns,
+    _urllib3_connection,
     _validate_url_safety,
     analyze_html_content,
     analyze_webpage,
@@ -258,7 +261,16 @@ class AnalyzeWebpageTests(SimpleTestCase):
         m.status_code = status_code
         m.text = text
         m.headers = headers or {}
+        m.encoding = "utf-8"
+        m.apparent_encoding = "utf-8"
+        # analyze_webpage now streams via iter_content (audit M-3 — body cap),
+        # so the mock must yield the fixture body in one chunk.
+        body_bytes = text.encode("utf-8") if text else b""
+        m.iter_content = mock.Mock(
+            return_value=iter([body_bytes]) if body_bytes else iter([])
+        )
         m.raise_for_status = mock.Mock()
+        m.close = mock.Mock()
         return m
 
     def test_fetches_and_parses_simple_page(self):
@@ -324,6 +336,127 @@ class AnalyzeWebpageTests(SimpleTestCase):
         ):
             with self.assertRaises(UnsafeURLError):
                 analyze_webpage("https://example.com/")
+
+    def test_rejects_response_body_over_cap(self):
+        """Audit M-3: a response larger than MAX_RESPONSE_BYTES is refused."""
+        oversized = mock.Mock()
+        oversized.status_code = 200
+        oversized.headers = {}
+        oversized.encoding = "utf-8"
+        oversized.apparent_encoding = "utf-8"
+        # Yield two chunks whose combined size exceeds the cap.
+        big_chunk = b"x" * (MAX_RESPONSE_BYTES // 2 + 1024)
+        oversized.iter_content = mock.Mock(
+            return_value=iter([big_chunk, big_chunk])
+        )
+        oversized.raise_for_status = mock.Mock()
+        oversized.close = mock.Mock()
+        with mock.patch(
+            "analyzer.services.socket.getaddrinfo",
+            return_value=_public_addrinfo(),
+        ), mock.patch(
+            "analyzer.services.requests.Session.get",
+            return_value=oversized,
+        ):
+            with self.assertRaises(UnsafeURLError) as ctx:
+                analyze_webpage("https://example.com/")
+        self.assertIn("byte cap", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# DNS-rebinding defence — audit finding C-C
+# ---------------------------------------------------------------------------
+
+class DnsRebindingDefenceTests(SimpleTestCase):
+    """
+    The TCP connection must target the IP we validated at gate time, not
+    whatever a hostile DNS server would hand back on a second resolution.
+    """
+
+    def test_pin_dns_redirects_target_host_connect_to_pinned_ip(self):
+        captured_targets = []
+        sentinel = object()
+
+        def stub_create_connection(address, *args, **kwargs):
+            captured_targets.append(address[0])
+            return sentinel
+
+        original = _urllib3_connection.create_connection
+        _urllib3_connection.create_connection = stub_create_connection
+        try:
+            with _pin_dns("example.com", "93.184.216.34"):
+                # Inside the context, the connect must be rerouted.
+                result = _urllib3_connection.create_connection(
+                    ("example.com", 443)
+                )
+            # After the context, the original is restored.
+            self.assertIs(
+                _urllib3_connection.create_connection, stub_create_connection,
+                "_pin_dns must restore the previous create_connection",
+            )
+        finally:
+            _urllib3_connection.create_connection = original
+
+        self.assertEqual(captured_targets, ["93.184.216.34"])
+        self.assertIs(result, sentinel)
+
+    def test_pin_dns_passes_through_unrelated_hosts(self):
+        captured_targets = []
+
+        def stub_create_connection(address, *args, **kwargs):
+            captured_targets.append(address[0])
+            return mock.Mock()
+
+        original = _urllib3_connection.create_connection
+        _urllib3_connection.create_connection = stub_create_connection
+        try:
+            with _pin_dns("example.com", "93.184.216.34"):
+                _urllib3_connection.create_connection(("other.test", 443))
+        finally:
+            _urllib3_connection.create_connection = original
+
+        self.assertEqual(captured_targets, ["other.test"])
+
+    def test_analyze_webpage_pins_to_validated_ip(self):
+        """
+        Even if a 'rebinding' mock would return a private IP at the second
+        DNS lookup, analyze_webpage must connect to the IP captured at
+        validation time.
+        """
+        public_ip = "93.184.216.34"
+        captured_connect_targets = []
+
+        def stub_create_connection(address, *args, **kwargs):
+            captured_connect_targets.append(address[0])
+            raise OSError("test stub — never actually connect")
+
+        # Simulate hostile DNS: validation sees the public IP, but a second
+        # lookup (which would happen inside urllib3) would return private.
+        rebinding_addrinfo = [
+            _public_addrinfo(public_ip),       # validation call
+            _private_addrinfo("10.0.0.1"),     # would be the rebound answer
+        ]
+
+        with mock.patch(
+            "analyzer.services.socket.getaddrinfo",
+            side_effect=rebinding_addrinfo,
+        ), mock.patch(
+            "analyzer.services._urllib3_connection.create_connection",
+            side_effect=stub_create_connection,
+        ):
+            # The fake connect raises OSError → requests bubbles up a
+            # ConnectionError. The point is the connect target.
+            with self.assertRaises(Exception):
+                analyze_webpage("https://example.com/")
+
+        self.assertTrue(
+            captured_connect_targets,
+            "expected at least one connect attempt to be observed",
+        )
+        self.assertEqual(
+            captured_connect_targets[0], public_ip,
+            "connect must target the validated IP, not the rebound private IP",
+        )
 
 
 # ---------------------------------------------------------------------------

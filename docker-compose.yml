@@ -63,7 +63,15 @@ services:
       DJANGO_MIGRATE: "1"
       DJANGO_COLLECTSTATIC: "1"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-test-key-change-me-in-production}
+      # Audit C-A: dedicated JWT signing key. Falls back to DJANGO_SECRET_KEY
+      # only when unset, so a SECRET_KEY rotation no longer invalidates every
+      # outstanding token.
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-${DJANGO_SECRET_KEY:-insecure-test-key-change-me-in-production}}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      # Disable SSL redirect + Secure cookie flags for plain-HTTP local dev.
+      # Flip to 1 when a TLS terminator is in front of the stack.
+      DJANGO_HTTPS_ENFORCED: ${DJANGO_HTTPS_ENFORCED:-0}
+      JWT_REFRESH_COOKIE_SAMESITE: ${JWT_REFRESH_COOKIE_SAMESITE:-Lax}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,web}
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:8080,http://127.0.0.1:8080}
       DJANGO_LOG_LEVEL: ${DJANGO_LOG_LEVEL:-INFO}
@@ -101,7 +109,15 @@ services:
       DJANGO_MIGRATE: "0"
       DJANGO_COLLECTSTATIC: "0"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-test-key-change-me-in-production}
+      # Audit C-A: dedicated JWT signing key. Falls back to DJANGO_SECRET_KEY
+      # only when unset, so a SECRET_KEY rotation no longer invalidates every
+      # outstanding token.
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-${DJANGO_SECRET_KEY:-insecure-test-key-change-me-in-production}}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      # Disable SSL redirect + Secure cookie flags for plain-HTTP local dev.
+      # Flip to 1 when a TLS terminator is in front of the stack.
+      DJANGO_HTTPS_ENFORCED: ${DJANGO_HTTPS_ENFORCED:-0}
+      JWT_REFRESH_COOKIE_SAMESITE: ${JWT_REFRESH_COOKIE_SAMESITE:-Lax}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,web}
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:8080,http://127.0.0.1:8080}
       DJANGO_LOG_LEVEL: ${DJANGO_LOG_LEVEL:-INFO}

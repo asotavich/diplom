@@ -3,30 +3,30 @@
  *
  * Request pipeline
  * ----------------
- * Every request gets `Authorization: Bearer <access>` attached if a
- * token is present in localStorage.
+ * Every request gets `Authorization: Bearer <access>` attached if an
+ * access token is in memory (see `lib/storage.js`).
  *
  * Response pipeline
  * -----------------
- * On a 401 we try to swap the expired access token for a fresh pair
- * via `POST /api/auth/refresh/`. If that works we retry the original
- * request once. Concurrent in-flight requests that all 401 during the
- * same refresh window are queued so we don't trigger a refresh per
- * request — important while the dashboard fires several requests in
- * parallel on load.
+ * On a 401 we POST to `/api/auth/refresh/`. The refresh JWT travels in
+ * an httpOnly cookie set at login/register time (audit C-B), so the
+ * request body is empty — the browser attaches the cookie for us.
+ * If the refresh succeeds we retry the original request once.
+ * Concurrent in-flight requests that all 401 during the same refresh
+ * window are queued so we don't trigger a refresh per request — important
+ * while the dashboard fires several requests in parallel on load.
  *
- * If the refresh itself fails we clear the tokens and emit a custom
- * event (`auth:logout`) that the AuthContext listens to so the SPA
- * can redirect to /login without a full reload.
+ * If the refresh itself fails we clear the in-memory access token and
+ * emit a custom event (`auth:logout`) that the AuthContext listens to so
+ * the SPA can redirect to /login without a full reload.
  */
 
 import axios from "axios";
 
 import {
-  clearTokens,
+  clearAccessToken,
   getAccessToken,
-  getRefreshToken,
-  setTokens,
+  setAccessToken,
 } from "../lib/storage";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -34,6 +34,8 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 export const api = axios.create({
   baseURL: BASE_URL,
   headers: { "Content-Type": "application/json" },
+  // Audit C-B — the refresh-token cookie must accompany /api/auth/* calls.
+  withCredentials: true,
 });
 
 // A *bare* axios (no interceptors) used for the refresh call itself so we
@@ -41,6 +43,7 @@ export const api = axios.create({
 const bareAxios = axios.create({
   baseURL: BASE_URL,
   headers: { "Content-Type": "application/json" },
+  withCredentials: true,
 });
 
 // ---------------------------------------------------------------------------
@@ -71,7 +74,7 @@ function drainQueue(error, token) {
 
 /** Fire a global event the AuthContext listens for. */
 function dispatchLogout() {
-  clearTokens();
+  clearAccessToken();
   window.dispatchEvent(new CustomEvent("auth:logout"));
 }
 
@@ -106,13 +109,9 @@ api.interceptors.response.use(
     isRefreshing = true;
 
     try {
-      const refresh = getRefreshToken();
-      if (!refresh) {
-        throw new Error("No refresh token available.");
-      }
-
-      const { data } = await bareAxios.post("/auth/refresh/", { refresh });
-      setTokens({ access: data.access, refresh: data.refresh });
+      // Cookie carries the refresh token automatically; empty body is fine.
+      const { data } = await bareAxios.post("/auth/refresh/", {});
+      setAccessToken(data.access);
       drainQueue(null, data.access);
 
       original.headers.Authorization = `Bearer ${data.access}`;
